@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Unfriend Button (Debug & Fix)
+// @name         Roblox Instant Unfriend (Reflow & Clean)
 // @namespace    http://tampermonkey.net/
-// @version      13.0
-// @description  Instant unfriend buttons with fallback token fetch and error feedback.
+// @version      14.0
+// @description  Instantly unfriends users, reflows grid items into empty spots, and stops page resets.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -12,77 +12,63 @@
 (function() {
     'use strict';
 
-    let currentCsrfToken = null;
+    let cachedCsrfToken = null;
 
-    // Grab CSRF token from DOM or fetch header
-    async function fetchCsrfToken() {
+    // Get CSRF token safely
+    function getCsrfToken() {
+        if (cachedCsrfToken) return cachedCsrfToken;
         const meta = document.querySelector('meta[name="csrf-token"]');
         if (meta) {
-            const token = meta.getAttribute('data-token') || meta.getAttribute('content');
-            if (token) return token;
+            cachedCsrfToken = meta.getAttribute('data-token') || meta.getAttribute('content');
         }
-
-        // Send a dummy request to trigger a 403 with the fresh token in headers
-        try {
-            const res = await fetch('https://friends.roblox.com/v1/users/1/unfriend', {
-                method: 'POST',
-                credentials: 'include'
-            });
-            const token = res.headers.get('x-csrf-token');
-            if (token) return token;
-        } catch (e) {
-            console.error('[UnfriendScript] CSRF Fetch Error:', e);
-        }
-        return '';
+        return cachedCsrfToken || '';
     }
 
-    // Call unfriend endpoint
-    async function performUnfriend(userId) {
-        if (!currentCsrfToken) {
-            currentCsrfToken = await fetchCsrfToken();
-        }
+    // Call Roblox API to unfriend user
+    async function unfriendUser(userId) {
+        let token = getCsrfToken();
 
         try {
             let res = await fetch(`https://friends.roblox.com/v1/users/${userId}/unfriend`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': currentCsrfToken
+                    'X-CSRF-TOKEN': token
                 },
                 credentials: 'include'
             });
 
-            // If token expired (403), grab new token sent back in response headers and retry once
             if (res.status === 403) {
                 const newToken = res.headers.get('x-csrf-token');
                 if (newToken) {
-                    currentCsrfToken = newToken;
+                    cachedCsrfToken = newToken;
                     res = await fetch(`https://friends.roblox.com/v1/users/${userId}/unfriend`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
-                            'X-CSRF-TOKEN': currentCsrfToken
+                            'X-CSRF-TOKEN': newToken
                         },
                         credentials: 'include'
                     });
                 }
             }
 
-            return { ok: res.ok, status: res.status };
+            return res.ok;
         } catch (err) {
-            console.error('[UnfriendScript] Network Error:', err);
-            return { ok: false, status: 'NET' };
+            return false;
         }
     }
 
     function scanAndAttach() {
-        // Find friend tiles
+        // Target friend card elements
         const cards = document.querySelectorAll('.friend-card, .avatar-card-container, .list-item');
 
         cards.forEach(card => {
-            if (card.querySelector('.instant-unfriend-btn')) return;
+            // Ignore elements inside top navigation or header bar
+            if (card.closest('header, nav, .navbar, .header-container') || card.querySelector('.instant-unfriend-btn')) {
+                return;
+            }
 
-            // Robust link search matching /users/123456
             const link = card.querySelector('a[href*="/users/"]');
             if (!link) return;
 
@@ -101,8 +87,8 @@
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '50%',
-                width: '26px',
-                height: '26px',
+                width: '24px',
+                height: '24px',
                 fontSize: '12px',
                 fontWeight: 'bold',
                 cursor: 'pointer',
@@ -110,7 +96,7 @@
                 top: '4px',
                 right: '4px',
                 zIndex: '99999',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
                 pointerEvents: 'auto'
             });
 
@@ -118,32 +104,37 @@
                 card.style.position = 'relative';
             }
 
-            // Prevent card tap/navigation
-            ['touchstart', 'mousedown', 'pointerdown'].forEach(evt => {
-                btn.addEventListener(evt, (e) => e.stopPropagation(), { passive: true });
+            // Stop touch and click bubbling immediately to prevent page reset/navigation
+            ['touchstart', 'touchend', 'mousedown', 'mouseup', 'pointerdown'].forEach(evtType => {
+                btn.addEventListener(evtType, (e) => {
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                }, true);
             });
 
             btn.addEventListener('click', async (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                e.stopImmediatePropagation();
 
                 btn.innerText = '...';
                 btn.style.backgroundColor = '#7f8c8d';
 
-                const result = await performUnfriend(userId);
+                const success = await unfriendUser(userId);
 
-                if (result.ok) {
-                    card.style.transition = 'opacity 0.2s ease';
-                    card.style.opacity = '0.1';
-                    btn.remove();
-                } else {
-                    // Display status code on button for debugging
-                    btn.innerText = result.status || 'Err';
-                    btn.style.backgroundColor = '#d32f2f';
+                if (success) {
+                    // Smoothly scale down and fade out card
+                    card.style.transition = 'all 0.2s ease-out';
+                    card.style.opacity = '0';
+                    card.style.transform = 'scale(0.5)';
+
+                    // Remove node from DOM so remaining cards shift left/up naturally
                     setTimeout(() => {
-                        btn.innerText = '✕';
-                        btn.style.backgroundColor = '#e74c3c';
-                    }, 2000);
+                        card.remove();
+                    }, 200);
+                } else {
+                    btn.innerText = '✕';
+                    btn.style.backgroundColor = '#e74c3c';
                 }
             });
 
