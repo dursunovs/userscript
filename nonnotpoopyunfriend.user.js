@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Unfriend (Reflow & Keep Page)
+// @name         Roblox Unfriend (Fixed Click & Keep Page)
 // @namespace    http://tampermonkey.net/
-// @version      15.0
-// @description  Instantly unfriends users, reflows grid, and maintains current page position.
+// @version      16.0
+// @description  Restores instant unfriend button execution, auto-reflows grid items, and locks page position.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -14,7 +14,7 @@
 
     let cachedCsrfToken = null;
 
-    // Retrieve security token safely
+    // Get CSRF Token
     function getCsrfToken() {
         if (cachedCsrfToken) return cachedCsrfToken;
         const meta = document.querySelector('meta[name="csrf-token"]');
@@ -24,7 +24,7 @@
         return cachedCsrfToken || '';
     }
 
-    // Unfriend API call
+    // Call Roblox API
     async function unfriendUser(userId) {
         let token = getCsrfToken();
 
@@ -59,36 +59,32 @@
         }
     }
 
-    // Save and restore page position if Roblox forces a reset
-    function maintainPagePosition() {
-        const activePageBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
-        if (activePageBtn && activePageBtn.innerText) {
-            const pageNum = activePageBtn.innerText.trim();
-            sessionStorage.setItem('rbx_friends_last_page', pageNum);
+    // Lock and maintain pagination position
+    function saveAndLockPage() {
+        const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
+        if (activeBtn && activeBtn.innerText) {
+            const currentPg = activeBtn.innerText.trim();
+            sessionStorage.setItem('rbx_current_page', currentPg);
         }
 
-        // If page reset to 1 unexpectedly, trigger click on saved page number
-        const savedPage = sessionStorage.getItem('rbx_friends_last_page');
-        if (savedPage && savedPage !== '1') {
-            const isCurrentlyPage1 = activePageBtn && activePageBtn.innerText.trim() === '1';
-            if (isCurrentlyPage1) {
-                const targetPageBtn = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'))
-                    .find(el => el.innerText.trim() === savedPage);
-                if (targetPageBtn) {
-                    targetPageBtn.click();
-                }
+        const savedPg = sessionStorage.getItem('rbx_current_page');
+        if (savedPg && savedPg !== '1') {
+            const isPage1 = activeBtn && activeBtn.innerText.trim() === '1';
+            if (isPage1) {
+                const pgButtons = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'));
+                const targetBtn = pgButtons.find(b => b.innerText.trim() === savedPg);
+                if (targetBtn) targetBtn.click();
             }
         }
     }
 
     function scanAndAttach() {
-        maintainPagePosition();
+        saveAndLockPage();
 
-        // Target friend cards
         const cards = document.querySelectorAll('.friend-card, .avatar-card-container, .list-item');
 
         cards.forEach(card => {
-            // Skip elements in header or top navigation bar
+            // Ignore headers/navbars or already injected buttons
             if (card.closest('header, nav, .navbar, .header-container') || card.querySelector('.instant-unfriend-btn')) {
                 return;
             }
@@ -127,16 +123,15 @@
                 card.style.position = 'relative';
             }
 
-            // Stop click propagation
-            ['touchstart', 'touchend', 'mousedown', 'mouseup', 'pointerdown', 'click'].forEach(evtType => {
-                btn.addEventListener(evtType, (e) => {
-                    e.stopPropagation();
-                    e.stopImmediatePropagation();
-                }, true);
+            // Prevent card link navigation when tapping button
+            ['touchstart', 'mousedown', 'pointerdown'].forEach(evtType => {
+                btn.addEventListener(evtType, (e) => e.stopPropagation());
             });
 
-            btn.addEventListener('click', async (e) => {
+            // Action execution handler
+            btn.onclick = async function(e) {
                 e.preventDefault();
+                e.stopPropagation();
 
                 btn.innerText = '...';
                 btn.style.backgroundColor = '#7f8c8d';
@@ -144,15 +139,14 @@
                 const success = await unfriendUser(userId);
 
                 if (success) {
-                    // Target the outermost wrapper element (li or .list-item)
+                    // Find outermost grid wrapper (li or .list-item)
                     const outerWrapper = card.closest('li, .list-item') || card;
 
-                    // Fade out
-                    outerWrapper.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                    outerWrapper.style.transition = 'all 0.15s ease';
                     outerWrapper.style.opacity = '0';
                     outerWrapper.style.transform = 'scale(0.8)';
 
-                    // Hide outer wrapper so grid reflows automatically
+                    // Hide container so grid closes gap instantly
                     setTimeout(() => {
                         outerWrapper.style.display = 'none';
                     }, 150);
@@ -160,7 +154,7 @@
                     btn.innerText = '✕';
                     btn.style.backgroundColor = '#e74c3c';
                 }
-            });
+            };
 
             card.appendChild(btn);
         });
