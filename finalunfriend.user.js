@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Unfriend (Hard Lock Page Position)
+// @name         Roblox Instant Unfriend (Zero-Crash Reflow)
 // @namespace    http://tampermonkey.net/
-// @version      17.0
-// @description  Hard-locks Roblox pagination state, removes grid gaps, and unfriends instantly.
+// @version      20.0
+// @description  Unfriends instantly, fills the grid gap, and prevents React from crashing back to Page 1.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -13,27 +13,8 @@
     'use strict';
 
     let cachedCsrfToken = null;
-    let lockedPageNumber = 1;
 
-    // Track active page number from UI clicks
-    document.addEventListener('click', (e) => {
-        const pageBtn = e.target.closest('.pager a, .pagination a, [class*="pager"] a, .page-num');
-        if (pageBtn) {
-            const num = parseInt(pageBtn.innerText.trim(), 10);
-            if (!isNaN(num) && num > 0) {
-                lockedPageNumber = num;
-                sessionStorage.setItem('rbx_locked_page', num);
-            }
-        }
-    }, true);
-
-    // Initialize locked page from stored state
-    const saved = sessionStorage.getItem('rbx_locked_page');
-    if (saved) {
-        lockedPageNumber = parseInt(saved, 10) || 1;
-    }
-
-    // Get CSRF Token
+    // Grab the security token needed to tell Roblox you are authorized to unfriend
     function getCsrfToken() {
         if (cachedCsrfToken) return cachedCsrfToken;
         const meta = document.querySelector('meta[name="csrf-token"]');
@@ -43,7 +24,7 @@
         return cachedCsrfToken || '';
     }
 
-    // Direct unfriend request
+    // Call the Unfriend API
     async function unfriendUser(userId) {
         let token = getCsrfToken();
 
@@ -57,6 +38,7 @@
                 credentials: 'include'
             });
 
+            // If the token is stale, Roblox sends a new one back. Catch it and retry instantly.
             if (res.status === 403) {
                 const newToken = res.headers.get('x-csrf-token');
                 if (newToken) {
@@ -71,37 +53,25 @@
                     });
                 }
             }
-
             return res.ok;
         } catch (err) {
             return false;
         }
     }
 
-    // Force UI back to locked page if Roblox resets it automatically
-    function enforcePageLock() {
-        if (lockedPageNumber <= 1) return;
-
-        const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
-        const currentUIPage = activeBtn ? parseInt(activeBtn.innerText.trim(), 10) : 1;
-
-        if (currentUIPage === 1 && lockedPageNumber > 1) {
-            const allPageBtns = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'));
-            const targetBtn = allPageBtns.find(b => parseInt(b.innerText.trim(), 10) === lockedPageNumber);
-
-            if (targetBtn) {
-                targetBtn.click();
-            }
-        }
+    // Aggressively swallow all interactions so Roblox's background scripts never notice the click
+    function devourEvent(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
     }
 
     function scanAndAttach() {
-        enforcePageLock();
-
+        // Target the friend cards on the screen
         const cards = document.querySelectorAll('.friend-card, .avatar-card-container, .list-item');
 
         cards.forEach(card => {
-            // Ignore headers/navbars or already injected buttons
+            // Ignore the top search/robux bar and any card we already injected
             if (card.closest('header, nav, .navbar, .header-container') || card.querySelector('.instant-unfriend-btn')) {
                 return;
             }
@@ -115,6 +85,7 @@
 
             const userId = match[1];
 
+            // Build the button
             const btn = document.createElement('button');
             btn.className = 'instant-unfriend-btn';
             btn.innerText = '✕';
@@ -133,54 +104,58 @@
                 top: '4px',
                 right: '4px',
                 zIndex: '99999',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
+                boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                pointerEvents: 'auto'
             });
 
             if (getComputedStyle(card).position === 'static') {
                 card.style.position = 'relative';
             }
 
-            // Isolate touch/pointer events from propagating to parent links
-            ['touchstart', 'mousedown', 'pointerdown'].forEach(evtType => {
-                btn.addEventListener(evtType, (e) => e.stopPropagation());
+            // Bind the event devourer to every type of tap/click using the capture phase (true)
+            ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend', 'click'].forEach(evtType => {
+                btn.addEventListener(evtType, devourEvent, true);
             });
 
-            btn.onclick = async function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-
+            // The actual logic when you tap the button
+            btn.addEventListener('click', async (e) => {
                 btn.innerText = '...';
                 btn.style.backgroundColor = '#7f8c8d';
 
                 const success = await unfriendUser(userId);
 
                 if (success) {
-                    // Lock active page immediately upon click
-                    const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
-                    if (activeBtn) {
-                        const num = parseInt(activeBtn.innerText.trim(), 10);
-                        if (!isNaN(num)) lockedPageNumber = num;
-                    }
-
-                    // Target outermost element to eliminate blank hole in grid
+                    // Find the absolute outermost boundary of the friend card
                     const outerWrapper = card.closest('li, .list-item') || card;
 
-                    outerWrapper.style.transition = 'all 0.15s ease';
+                    // Fade out smoothly
+                    outerWrapper.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
                     outerWrapper.style.opacity = '0';
-                    outerWrapper.style.transform = 'scale(0.8)';
+                    outerWrapper.style.transform = 'scale(0.5)';
 
+                    // Instead of deleting the code, we crush it to 0 pixels and rip it out of the flow.
+                    // This forces the grid to close the gap without triggering a React page reset.
                     setTimeout(() => {
-                        outerWrapper.style.display = 'none';
-                    }, 150);
+                        outerWrapper.style.position = 'absolute';
+                        outerWrapper.style.width = '0px';
+                        outerWrapper.style.height = '0px';
+                        outerWrapper.style.margin = '0px';
+                        outerWrapper.style.padding = '0px';
+                        outerWrapper.style.overflow = 'hidden';
+                        outerWrapper.style.pointerEvents = 'none';
+                    }, 200);
+
                 } else {
+                    // Revert if API fails
                     btn.innerText = '✕';
                     btn.style.backgroundColor = '#e74c3c';
                 }
-            };
+            }, true);
 
             card.appendChild(btn);
         });
     }
 
-    setInterval(scanAndAttach, 400);
+    // Run constantly to catch new pages loading in
+    setInterval(scanAndAttach, 500);
 })();
