@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Instant Unfriend (Clean & Fast)
+// @name         Roblox Instant Unfriend (Page Freeze Fix)
 // @namespace    http://tampermonkey.net/
-// @version      7.0
-// @description  Instantly unfriends users without altering status text or refreshing the page.
+// @version      9.0
+// @description  Instantly unfriends users without resetting pagination or returning to page 1.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -15,7 +15,7 @@
 
     let cachedCsrfToken = null;
 
-    // Retrieve Roblox CSRF token
+    // Fetch CSRF Token for Roblox API requests
     async function getCsrfToken() {
         if (cachedCsrfToken) return cachedCsrfToken;
 
@@ -38,7 +38,7 @@
         }
     }
 
-    // Call unfriend endpoint
+    // Direct unfriend request via API
     async function unfriendUser(userId) {
         const token = await getCsrfToken();
         const controller = new AbortController();
@@ -79,13 +79,13 @@
         }
     }
 
-    function injectButtons() {
-        // Target containers inside the main friends page
-        const containers = document.querySelectorAll('.friends-content, .friends-list, #rbx-friends-container, .hlist');
-        if (!containers.length) return;
+    // Attach unfriend buttons without disturbing page structure
+    function attachUnfriendButtons() {
+        const mainContainers = document.querySelectorAll('.friends-content, .friends-list, #rbx-friends-container, .hlist');
+        if (!mainContainers.length) return;
 
-        containers.forEach(mainContainer => {
-            const cards = mainContainer.querySelectorAll('.list-item, .friend-card, [class*="friend-card"], .avatar-card-container');
+        mainContainers.forEach(container => {
+            const cards = container.querySelectorAll('.list-item, .friend-card, [class*="friend-card"], .avatar-card-container');
 
             cards.forEach(card => {
                 if (card.classList.contains('has-instant-btn')) return;
@@ -129,7 +129,7 @@
                     card.style.position = 'relative';
                 }
 
-                // Prevent touches/clicks from triggering Roblox navigation or resetting page scroll
+                // Stop interaction events from triggering Roblox links or page scroll shifts
                 btn.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
                 btn.addEventListener('mousedown', (e) => e.stopPropagation());
 
@@ -147,6 +147,8 @@
                         card.style.transition = 'all 0.2s ease';
                         card.style.opacity = '0';
                         card.style.transform = 'scale(0.8)';
+                        
+                        // Remove only this card locally without re-rendering the container
                         setTimeout(() => card.remove(), 200);
                     } else {
                         btn.innerText = '✕';
@@ -159,8 +161,9 @@
         });
     }
 
-    const observer = new MutationObserver(() => injectButtons());
+    // Monitor for newly loaded cards (e.g. when changing pages)
+    const observer = new MutationObserver(() => attachUnfriendButtons());
     observer.observe(document.body, { childList: true, subtree: true });
 
-    setTimeout(injectButtons, 500);
+    setTimeout(attachUnfriendButtons, 500);
 })();
