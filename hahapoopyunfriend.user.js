@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Unfriend (Fixed Click & Keep Page)
+// @name         Roblox Unfriend (Hard Lock Page Position)
 // @namespace    http://tampermonkey.net/
-// @version      16.0
-// @description  Restores instant unfriend button execution, auto-reflows grid items, and locks page position.
+// @version      17.0
+// @description  Hard-locks Roblox pagination state, removes grid gaps, and unfriends instantly.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -13,6 +13,25 @@
     'use strict';
 
     let cachedCsrfToken = null;
+    let lockedPageNumber = 1;
+
+    // Track active page number from UI clicks
+    document.addEventListener('click', (e) => {
+        const pageBtn = e.target.closest('.pager a, .pagination a, [class*="pager"] a, .page-num');
+        if (pageBtn) {
+            const num = parseInt(pageBtn.innerText.trim(), 10);
+            if (!isNaN(num) && num > 0) {
+                lockedPageNumber = num;
+                sessionStorage.setItem('rbx_locked_page', num);
+            }
+        }
+    }, true);
+
+    // Initialize locked page from stored state
+    const saved = sessionStorage.getItem('rbx_locked_page');
+    if (saved) {
+        lockedPageNumber = parseInt(saved, 10) || 1;
+    }
 
     // Get CSRF Token
     function getCsrfToken() {
@@ -24,7 +43,7 @@
         return cachedCsrfToken || '';
     }
 
-    // Call Roblox API
+    // Direct unfriend request
     async function unfriendUser(userId) {
         let token = getCsrfToken();
 
@@ -59,27 +78,25 @@
         }
     }
 
-    // Lock and maintain pagination position
-    function saveAndLockPage() {
-        const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
-        if (activeBtn && activeBtn.innerText) {
-            const currentPg = activeBtn.innerText.trim();
-            sessionStorage.setItem('rbx_current_page', currentPg);
-        }
+    // Force UI back to locked page if Roblox resets it automatically
+    function enforcePageLock() {
+        if (lockedPageNumber <= 1) return;
 
-        const savedPg = sessionStorage.getItem('rbx_current_page');
-        if (savedPg && savedPg !== '1') {
-            const isPage1 = activeBtn && activeBtn.innerText.trim() === '1';
-            if (isPage1) {
-                const pgButtons = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'));
-                const targetBtn = pgButtons.find(b => b.innerText.trim() === savedPg);
-                if (targetBtn) targetBtn.click();
+        const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
+        const currentUIPage = activeBtn ? parseInt(activeBtn.innerText.trim(), 10) : 1;
+
+        if (currentUIPage === 1 && lockedPageNumber > 1) {
+            const allPageBtns = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'));
+            const targetBtn = allPageBtns.find(b => parseInt(b.innerText.trim(), 10) === lockedPageNumber);
+
+            if (targetBtn) {
+                targetBtn.click();
             }
         }
     }
 
     function scanAndAttach() {
-        saveAndLockPage();
+        enforcePageLock();
 
         const cards = document.querySelectorAll('.friend-card, .avatar-card-container, .list-item');
 
@@ -123,12 +140,11 @@
                 card.style.position = 'relative';
             }
 
-            // Prevent card link navigation when tapping button
+            // Isolate touch/pointer events from propagating to parent links
             ['touchstart', 'mousedown', 'pointerdown'].forEach(evtType => {
                 btn.addEventListener(evtType, (e) => e.stopPropagation());
             });
 
-            // Action execution handler
             btn.onclick = async function(e) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -139,14 +155,20 @@
                 const success = await unfriendUser(userId);
 
                 if (success) {
-                    // Find outermost grid wrapper (li or .list-item)
+                    // Lock active page immediately upon click
+                    const activeBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
+                    if (activeBtn) {
+                        const num = parseInt(activeBtn.innerText.trim(), 10);
+                        if (!isNaN(num)) lockedPageNumber = num;
+                    }
+
+                    // Target outermost element to eliminate blank hole in grid
                     const outerWrapper = card.closest('li, .list-item') || card;
 
                     outerWrapper.style.transition = 'all 0.15s ease';
                     outerWrapper.style.opacity = '0';
                     outerWrapper.style.transform = 'scale(0.8)';
 
-                    // Hide container so grid closes gap instantly
                     setTimeout(() => {
                         outerWrapper.style.display = 'none';
                     }, 150);
@@ -160,5 +182,5 @@
         });
     }
 
-    setInterval(scanAndAttach, 600);
+    setInterval(scanAndAttach, 400);
 })();
