@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Roblox Instant Unfriend (Reflow & Clean)
+// @name         Roblox Unfriend (Reflow & Keep Page)
 // @namespace    http://tampermonkey.net/
-// @version      14.0
-// @description  Instantly unfriends users, reflows grid items into empty spots, and stops page resets.
+// @version      15.0
+// @description  Instantly unfriends users, reflows grid, and maintains current page position.
 // @match        https://www.roblox.com/users/*/friends*
 // @match        https://www.roblox.com/users/friends*
 // @match        https://web.roblox.com/users/*/friends*
@@ -14,7 +14,7 @@
 
     let cachedCsrfToken = null;
 
-    // Get CSRF token safely
+    // Retrieve security token safely
     function getCsrfToken() {
         if (cachedCsrfToken) return cachedCsrfToken;
         const meta = document.querySelector('meta[name="csrf-token"]');
@@ -24,7 +24,7 @@
         return cachedCsrfToken || '';
     }
 
-    // Call Roblox API to unfriend user
+    // Unfriend API call
     async function unfriendUser(userId) {
         let token = getCsrfToken();
 
@@ -59,12 +59,36 @@
         }
     }
 
+    // Save and restore page position if Roblox forces a reset
+    function maintainPagePosition() {
+        const activePageBtn = document.querySelector('.pager .active, .pagination .active, [class*="pager"] .active');
+        if (activePageBtn && activePageBtn.innerText) {
+            const pageNum = activePageBtn.innerText.trim();
+            sessionStorage.setItem('rbx_friends_last_page', pageNum);
+        }
+
+        // If page reset to 1 unexpectedly, trigger click on saved page number
+        const savedPage = sessionStorage.getItem('rbx_friends_last_page');
+        if (savedPage && savedPage !== '1') {
+            const isCurrentlyPage1 = activePageBtn && activePageBtn.innerText.trim() === '1';
+            if (isCurrentlyPage1) {
+                const targetPageBtn = Array.from(document.querySelectorAll('.pager a, .pagination a, [class*="pager"] a'))
+                    .find(el => el.innerText.trim() === savedPage);
+                if (targetPageBtn) {
+                    targetPageBtn.click();
+                }
+            }
+        }
+    }
+
     function scanAndAttach() {
-        // Target friend card elements
+        maintainPagePosition();
+
+        // Target friend cards
         const cards = document.querySelectorAll('.friend-card, .avatar-card-container, .list-item');
 
         cards.forEach(card => {
-            // Ignore elements inside top navigation or header bar
+            // Skip elements in header or top navigation bar
             if (card.closest('header, nav, .navbar, .header-container') || card.querySelector('.instant-unfriend-btn')) {
                 return;
             }
@@ -96,16 +120,15 @@
                 top: '4px',
                 right: '4px',
                 zIndex: '99999',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                pointerEvents: 'auto'
+                boxShadow: '0 2px 4px rgba(0,0,0,0.3)'
             });
 
             if (getComputedStyle(card).position === 'static') {
                 card.style.position = 'relative';
             }
 
-            // Stop touch and click bubbling immediately to prevent page reset/navigation
-            ['touchstart', 'touchend', 'mousedown', 'mouseup', 'pointerdown'].forEach(evtType => {
+            // Stop click propagation
+            ['touchstart', 'touchend', 'mousedown', 'mouseup', 'pointerdown', 'click'].forEach(evtType => {
                 btn.addEventListener(evtType, (e) => {
                     e.stopPropagation();
                     e.stopImmediatePropagation();
@@ -114,8 +137,6 @@
 
             btn.addEventListener('click', async (e) => {
                 e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
 
                 btn.innerText = '...';
                 btn.style.backgroundColor = '#7f8c8d';
@@ -123,15 +144,18 @@
                 const success = await unfriendUser(userId);
 
                 if (success) {
-                    // Smoothly scale down and fade out card
-                    card.style.transition = 'all 0.2s ease-out';
-                    card.style.opacity = '0';
-                    card.style.transform = 'scale(0.5)';
+                    // Target the outermost wrapper element (li or .list-item)
+                    const outerWrapper = card.closest('li, .list-item') || card;
 
-                    // Remove node from DOM so remaining cards shift left/up naturally
+                    // Fade out
+                    outerWrapper.style.transition = 'opacity 0.15s ease, transform 0.15s ease';
+                    outerWrapper.style.opacity = '0';
+                    outerWrapper.style.transform = 'scale(0.8)';
+
+                    // Hide outer wrapper so grid reflows automatically
                     setTimeout(() => {
-                        card.remove();
-                    }, 200);
+                        outerWrapper.style.display = 'none';
+                    }, 150);
                 } else {
                     btn.innerText = '✕';
                     btn.style.backgroundColor = '#e74c3c';
@@ -142,5 +166,5 @@
         });
     }
 
-    setInterval(scanAndAttach, 800);
+    setInterval(scanAndAttach, 600);
 })();
